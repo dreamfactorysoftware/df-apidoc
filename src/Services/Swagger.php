@@ -158,6 +158,7 @@ class Swagger extends BaseRestService
 //                                "url"  => "http://www.apache.org/licenses/LICENSE-2.0.html"
 //                            ],
                 'version'     => Config::get('df.api_version'),
+                'group'       => $service->getServiceTypeInfo()->getGroup(),
             ];
 
             $this->addServiceInfo($content, $service->getName(), $doc, true);
