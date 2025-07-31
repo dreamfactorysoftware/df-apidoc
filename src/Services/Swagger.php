@@ -70,7 +70,6 @@ class Swagger extends BaseRestService
             $this->request->getParameterAsBool(ApiOptions::AS_LIST)) {
             return parent::handleGET(); // returning a list of services here
         }
-
         $content = [
             'openapi'    => static::OPENAPI_VERSION,
             'servers'    => [
@@ -161,6 +160,7 @@ class Swagger extends BaseRestService
                 'group'       => $service->getServiceTypeInfo()->getGroup(),
             ];
 
+            $this->populateWildcardsWithValues($doc, $service, $this->resource);
             $this->addServiceInfo($content, $service->getName(), $doc, true);
 
             Log::info('Swagger file build process complete.');
@@ -192,6 +192,7 @@ class Swagger extends BaseRestService
             try {
                 if (!empty($service = ServiceManager::getService($serviceName))) {
                     if (!empty($doc = $service->getApiDoc($this->request->getParameterAsBool(ApiOptions::REFRESH)))) {
+                        $this->populateWildcardsWithValues($doc, $service);
                         $this->addServiceInfo($content, $serviceName, $doc, false);
                         $content['tags'][] = [
                             'name'        => $service->getName(),
@@ -207,6 +208,78 @@ class Swagger extends BaseRestService
         Log::info('Swagger file build process complete.');
 
         return $content;
+    }
+
+    protected function populateWildcardsWithValues(array &$doc, $service)
+    {
+        if ($this->request->getParameter('expand_schema') && method_exists($service, 'getTableNames')) {
+            $tables = $service->getTableNames();
+            if (empty($tables)) {
+                Log::warning('[Swagger] No tables found for this service.');
+                $doc['x-warning'] = 'No tables found for this service.';
+            } else {
+                $this->expandPathsForTables($doc, $service, $tables);
+            }
+        }
+    }
+
+    private function expandPathsForTables(array &$doc, $service, $tables)
+    {
+        $newPaths = [];
+        foreach ($doc['paths'] as $path => $pathMethods) {
+            if (strpos($path, '{table_name}') !== false) {
+                foreach ($tables as $table) {
+                    $tableName = $this->getTableName($table);
+                    $schema = null;
+                    if (method_exists($service, 'getTableSchema')) {
+                        try {
+                            $schema = $service->getTableSchema($tableName);
+                        } catch (\Throwable $e) {
+                            Log::warning("[Swagger] Could not fetch schema for table $tableName: " . $e->getMessage());
+                        }
+                    }
+
+                    if ($schema && method_exists($schema, 'getColumns') && !empty($columns = $schema->getColumns())) {
+                        foreach ($columns as $column) {
+                            $columnName = is_object($column) && method_exists($column, 'getName') ? $column->getName() : (string)$column;
+                            $finalPathMethods = $pathMethods;
+                            // Remove 'table_name' and 'field_name' parameters from the parameters array
+                            if (is_array($finalPathMethods['parameters'])) {
+                                $finalPathMethods['parameters'] = array_values(array_filter(
+                                    $finalPathMethods['parameters'],
+                                    function ($param) {
+                                        return !in_array($param['name'] ?? '', ['table_name', 'field_name']);
+                                    }
+                                ));
+                            }
+                            $expandedPath = str_replace(
+                                ['{table_name}', '{field_name}'],
+                                [$tableName, $columnName],
+                                $path
+                            );
+                            foreach ($finalPathMethods as $httpVerb => &$methodDef) {
+                                if (isset($methodDef['operationId'])) {
+                                    $methodDef['operationId'] = $methodDef['operationId'] . '_' . $tableName . (isset($columnName) ? '_' . $columnName : '');
+                                }
+                            }
+                            unset($methodDef); // break reference
+                            $newPaths[$expandedPath] = $finalPathMethods;
+                        }
+                    }
+                }
+            } else {
+                $newPaths[$path] = $pathMethods;
+            }
+        }
+        $doc['paths'] = $newPaths;
+    }
+
+    private function getTableName($table)
+    {
+        if (is_object($table) && method_exists($table, 'getName')) {
+            return $table->getName();
+        }
+        return (string)$table;
     }
 
     /**
@@ -254,7 +327,7 @@ class Swagger extends BaseRestService
                     $resource = trim($path, '/'); // should never happen
                 }
             }
-            $allowed = Session::getServicePermissions($name, $resource);
+            $allowed = Session::getServicePermissions($name);
             foreach ($pathInfo as $verb => $verbInfo) {
                 // Need to check if verb is really verb
                 try {
@@ -286,16 +359,22 @@ class Swagger extends BaseRestService
         $base['paths'] = array_merge((array)array_get($base, 'paths'), $paths);
         if (isset($content['components'])) {
             if (isset($content['components']['requestBodies'])) {
-                $base['components']['requestBodies'] = array_merge((array)array_get($base, 'components.requestBodies'),
-                    (array)$content['components']['requestBodies']);
+                $base['components']['requestBodies'] = array_merge(
+                    (array)array_get($base, 'components.requestBodies'),
+                    (array)$content['components']['requestBodies']
+                );
             }
             if (isset($content['components']['responses'])) {
-                $base['components']['responses'] = array_merge((array)array_get($base, 'components.responses'),
-                    (array)$content['components']['responses']);
+                $base['components']['responses'] = array_merge(
+                    (array)array_get($base, 'components.responses'),
+                    (array)$content['components']['responses']
+                );
             }
             if (isset($content['components']['schemas'])) {
-                $base['components']['schemas'] = array_merge((array)array_get($base, 'components.schemas'),
-                    (array)$content['components']['schemas']);
+                $base['components']['schemas'] = array_merge(
+                    (array)array_get($base, 'components.schemas'),
+                    (array)$content['components']['schemas']
+                );
             }
         }
 
@@ -325,30 +404,30 @@ class Swagger extends BaseRestService
                     ],
                     'responses'   => [
                         '200' => ['$ref' => '#/components/responses/ApiDocsResponse']
-//                            '200' => ['$ref' => '#/components/responses/ResourceList']
+                        //                            '200' => ['$ref' => '#/components/responses/ResourceList']
                     ],
                 ],
             ],
             '/{service_name}' => [
                 'get' =>
-                    [
-                        'summary'     => 'Retrieve the specification for a specific service.',
-                        'description' => 'This returns the Open API specification file for the requested service.',
-                        'operationId' => 'get' . $capitalized . 'ByService',
-                        'parameters'  => [
-                            [
-                                'name'        => 'service_name',
-                                'description' => 'Name of the service to retrieve the specification for.',
-                                'schema'      => ['type' => 'string'],
-                                'in'          => 'path',
-                                'required'    => true,
-                            ],
-                            ApiOptions::documentOption(ApiOptions::REFRESH),
+                [
+                    'summary'     => 'Retrieve the specification for a specific service.',
+                    'description' => 'This returns the Open API specification file for the requested service.',
+                    'operationId' => 'get' . $capitalized . 'ByService',
+                    'parameters'  => [
+                        [
+                            'name'        => 'service_name',
+                            'description' => 'Name of the service to retrieve the specification for.',
+                            'schema'      => ['type' => 'string'],
+                            'in'          => 'path',
+                            'required'    => true,
                         ],
-                        'responses'   => [
-                            '200' => ['$ref' => '#/components/responses/ApiDocsResponse']
-                        ],
+                        ApiOptions::documentOption(ApiOptions::REFRESH),
                     ],
+                    'responses'   => [
+                        '200' => ['$ref' => '#/components/responses/ApiDocsResponse']
+                    ],
+                ],
             ],
         ];
     }
