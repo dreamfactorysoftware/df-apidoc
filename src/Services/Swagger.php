@@ -328,7 +328,16 @@ class Swagger extends BaseRestService
                 }
             }
             $allowed = Session::getServicePermissions($name);
+
+            // OpenAPI 3.0 path-level keys that are NOT HTTP verbs
+            $nonVerbKeys = ['$ref', 'summary', 'description', 'servers', 'parameters'];
+
             foreach ($pathInfo as $verb => $verbInfo) {
+                // Skip OpenAPI spec keys that are not HTTP verbs
+                if (in_array($verb, $nonVerbKeys, true)) {
+                    continue;
+                }
+
                 // Need to check if verb is really verb
                 try {
                     $action = VerbsMask::toNumeric($verb);
@@ -350,8 +359,12 @@ class Swagger extends BaseRestService
                         $paths[$path][$verb] = $verbInfo;
                     }
                 } catch (\Exception $ex) {
-                    // not a valid verb, could be part of swagger spec, add it anyway
-                    $paths[$path][$verb] = $verbInfo;
+                    // Unknown key - could be an extension (x-*) or future OpenAPI feature
+                    // Only add if it looks like an extension
+                    if (strpos($verb, 'x-') === 0) {
+                        $paths[$path][$verb] = $verbInfo;
+                    }
+                    // Otherwise skip it to avoid treating it as an HTTP verb
                 }
             }
         }
