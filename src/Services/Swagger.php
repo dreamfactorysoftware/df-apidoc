@@ -367,6 +367,10 @@ class Swagger extends BaseRestService
                     // Otherwise skip it to avoid treating it as an HTTP verb
                 }
             }
+            // Preserve path-level parameters (fix for path params like table_name)
+            if (isset($pathInfo['parameters'])) {
+                $paths[$path]['parameters'] = $pathInfo['parameters'];
+            }
         }
 
         $base['paths'] = array_merge((array)array_get($base, 'paths'), $paths);
