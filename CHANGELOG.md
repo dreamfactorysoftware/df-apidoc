@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+
+## [0.8.5] - 2026-11-18
+- Laravel 13 package metadata (PHP 8.3 or later).
+- README overview section.
+
 ## [0.6.1] - 2018-02-25
 ### Fixed
 - DF-1296 Cleaned up path and resource handling before checking for session privileges
